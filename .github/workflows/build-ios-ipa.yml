@@ -1,0 +1,68 @@
+name: Build iOS IPA (ESign Unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Godot 4.7.2 & iOS Export Templates
+        run: |
+          GODOT_VER="4.7.2-stable"
+          TMPL_VER="4.7.2.stable"
+          curl -sL "https://github.com/godotengine/godot/releases/download/${GODOT_VER}/Godot_v${GODOT_VER}_macos.universal.zip" -o godot.zip
+          unzip -q godot.zip -d /tmp/godot
+          GODOT_BIN="/tmp/godot/Godot.app/Contents/MacOS/Godot"
+          chmod +x "$GODOT_BIN"
+
+          curl -sL "https://github.com/godotengine/godot/releases/download/${GODOT_VER}/Godot_v${GODOT_VER}_export_templates.tpz" -o templates.zip
+          mkdir -p "$HOME/Library/Application Support/Godot/export_templates/${TMPL_VER}"
+          unzip -q templates.zip -d /tmp/tmpl
+          mv /tmp/tmpl/templates/* "$HOME/Library/Application Support/Godot/export_templates/${TMPL_VER}/"
+          rm -rf godot.zip templates.zip /tmp/tmpl
+          echo "GODOT_BIN=${GODOT_BIN}" >> "$GITHUB_ENV"
+
+      - name: Import resources & Export Xcode project
+        run: |
+          mkdir -p build/ios
+          "$GODOT_BIN" --headless --path . --import --quit
+          "$GODOT_BIN" --headless --path . --export-release "iOS" "build/ios/AshenCrown.ipa" || true
+          test -d "build/ios/AshenCrown.xcodeproj"
+
+      - name: Compile Release arm64 with Xcode (Unsigned for ESign)
+        run: |
+          xcodebuild \
+            -project build/ios/AshenCrown.xcodeproj \
+            -scheme AshenCrown \
+            -configuration Release \
+            -sdk iphoneos \
+            -arch arm64 \
+            -derivedDataPath build/derived \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=YES \
+            DEPLOYMENT_POSTPROCESSING=YES \
+            STRIP_INSTALLED_PRODUCT=YES \
+            build
+
+      - name: Package compact AshenCrown.ipa
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/derived/Build/Products/Release-iphoneos/AshenCrown.app build/ipa/Payload/
+          cd build/ipa
+          zip -9 -y -r ../AshenCrown.ipa Payload
+          cd ../..
+          ls -lh build/AshenCrown.ipa
+
+      - name: Upload AshenCrown.ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: AshenCrown-iOS-IPA
+          path: build/AshenCrown.ipa
